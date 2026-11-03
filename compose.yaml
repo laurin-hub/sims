@@ -1,0 +1,15 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD muss gesetzt und nicht leer sein}"
+    ports:
+      - "127.0.0.1:14333:1433"
+    volumes:
+      - sims_sql_data:/var/opt/mssql
+
+volumes:
+  sims_sql_data:
+    name: sims_sql_data
