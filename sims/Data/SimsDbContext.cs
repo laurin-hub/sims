@@ -19,13 +19,21 @@ public class SimsDbContext : DbContext
     public DbSet<Incident> Incidents => Set<Incident>();
 
 
-    //
+    
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
+        modelBuilder.Entity<User>()
+            .Property(user => user.Username)
+            .HasMaxLength(100);
 
-        //
+        modelBuilder.Entity<User>()
+            .HasIndex(user => user.Username)
+            .IsUnique();
+
+
+        
         modelBuilder.Entity<Incident>()
             .HasOne<User>()
             .WithMany()
