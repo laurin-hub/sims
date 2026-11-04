@@ -6,6 +6,12 @@
 ## Beschreibung
 SIMS ist eine Anwendung zur Verwaltung von IT-Sicherheitsvorfällen.
 Aktueller Stand: Das ASP.NET-Core-Grundprojekt eingerichtet. Die Entwicklung der SIMS-Funktionen stehen an.
+Die Anwendung wird mit C# und .NET 10 auf Basis von ASP.NET Core entwickelt. Als relationale Datenbank wird der SQL Server mit dem Entity Framework Core betrieben
+
+- Datenmodelle für User und Incidet implementiert.
+- Entity Framework mit den Beziehungen zwischen Meldern, Bearbeitern und Incidents konfiguriert.
+- SQL Server 2022 als Docker-Container eingerichtet und erfolgreich gestartet.
+- Docker-Compose-Konfiguration für SQL Server erstellt und getestet
 
 ## Funktionen
 Geplant sind:
@@ -18,7 +24,9 @@ Geplant sind:
 ## Technologien
 - C# / .NET 10
 - ASP.NET Core
-- SQL Server und Entity Framework Core (geplant)
+- Entity Framework Core 10 - Datenbankzugriff und relationales Datenmodell
+- Microsoft SQL Server 2022 - relationales Datenbanksystem
+- Docker und Docker Compose - SQL-Server-Container eingerichtet
 - Redis (geplant)
 - Docker (geplant)
 ## Installation
@@ -30,6 +38,16 @@ cd sims
 dotnet build sims.slnx
 dotnet run --project sims/sims.csproj
 ```
+
+SQL Server wird über Docker Compose bereitgestellt:
+
+```powershell
+docker compose up -d sqlserver
+```
+
+Voraussetzung ist eine gesetzte Umgebungsvariable MSSQL_SA_PASSWORD.
+
+Die Datenbankmigration und die SIMS-REST-Endpunkte folgen.
 
 Aktuell ist der Beispielendpunkt `/weatherforecast` erreichbar. Die Docker-Anleitung folgt.
 
