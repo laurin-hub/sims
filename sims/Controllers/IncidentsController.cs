@@ -1,3 +1,4 @@
+using System.Data;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -40,7 +41,7 @@ public class IncidentsController : ControllerBase
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return Problem(statusCode: StatusCodes.Status500InternalServerError,
-                title: "Die Vorfälle konnten nicht geladen werden.");
+                title: "Die INcidents konnten nicht geladen werden.");
         }
     }
 
@@ -68,7 +69,7 @@ public class IncidentsController : ControllerBase
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return Problem(statusCode: StatusCodes.Status500InternalServerError,
-                title: "Der Vorfall konnte nicht geladen werden.");
+                title: "Der Incident konnte nicht geladen werden.");
         }
     }
 
@@ -98,7 +99,7 @@ public class IncidentsController : ControllerBase
                 assignee => assignee.Id == request.AssigneeId && assignee.IsActive, cancellationToken);
             if (!assigneeExists)
             {
-                return BadRequest(new { message = "Ein vorhandener, aktiver Bearbeiter ist erforderlich." });
+                return BadRequest(new { message = "Ein vorhandener aktiver Bearbeiter ist erforderlich." });
             }
 
             var incident = new Incident
@@ -134,8 +135,148 @@ public class IncidentsController : ControllerBase
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return Problem(statusCode: StatusCodes.Status500InternalServerError,
-                title: "Der Vorfall konnte nicht angelegt werden.");
+                title: "Der Incident konnte nicht angelegt werden.");
         }
+    }
+
+    [HttpPut("{id:int}")]
+    public async Task<ActionResult<IncidentResponseDto>> Update(
+        int id, UpdateIncidentRequestDto request, CancellationToken cancellationToken)
+    {
+        if (id <= 0 || string.IsNullOrWhiteSpace(request.System)
+            || string.IsNullOrWhiteSpace(request.Description)
+            || !Enum.IsDefined(request.Severity)
+            || (request.Status.HasValue && !Enum.IsDefined(request.Status.Value)))
+        {
+            return BadRequest(new { message = "ID, Pflichtfeldr, Severity oder Status sind ungültig" });
+        }
+
+        try
+        {
+            // Lesesperren bleiben bis zum Speichern bestehen, auch für Berechtigungen und Status.
+            await using var transaction = await _context.Database.BeginTransactionAsync(
+                IsolationLevel.RepeatableRead, cancellationToken);
+
+            var user = await GetCurrentUserAsync(cancellationToken);
+            if (user is null || !user.IsActive || !Enum.IsDefined(user.Role))
+            {
+                return Forbid();
+            }
+
+            var incident = await _context.Incidents.SingleOrDefaultAsync(
+                incident => incident.Id == id, cancellationToken);
+            if (incident is null)
+            {
+                return NotFound();
+            }
+
+            if (!CanEditIncident(user, incident))
+            {
+                return Forbid();
+            }
+
+            if (incident.Status == IncidentStatus.Closed)
+            {
+                return Conflict(new { message = "Geschlossene Incidents dürfen nicht bearbeitet werden" });
+            }
+
+            if (request.Status.HasValue
+                && (request.Status.Value == IncidentStatus.Closed
+                    || (request.Status.Value != incident.Status
+                        && !(incident.Status == IncidentStatus.New && request.Status.Value == IncidentStatus.Active))))
+            {
+                return Conflict(new { message = "Dieser Statuswechsel ist nicht erlaubt. Zum Schließen den Close-Endpunkt verwenden." });
+            }
+
+            incident.Severity = request.Severity;
+            incident.System = request.System.Trim();
+            incident.Description = request.Description.Trim();
+            incident.Cve = string.IsNullOrWhiteSpace(request.Cve) ? null : request.Cve.Trim();
+            if (request.Status.HasValue)
+            {
+                incident.Status = request.Status.Value;
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return Ok(ToResponseDto(incident));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Problem(statusCode: StatusCodes.Status500InternalServerError,
+                title: "Der Incidet konnte nicht bearbeitet werden.");
+        }
+    }
+
+    [HttpPost("{id:int}/close")]
+    public async Task<ActionResult<IncidentResponseDto>> Close(int id, CancellationToken cancellationToken)
+    {
+        if (id <= 0)
+        {
+            return BadRequest(new { message = "Die Incident-ID muss größer als 0 sein." });
+        }
+
+        try
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync(
+                IsolationLevel.RepeatableRead, cancellationToken);
+
+            var user = await GetCurrentUserAsync(cancellationToken);
+            if (user is null || !user.IsActive || !Enum.IsDefined(user.Role))
+            {
+                return Forbid();
+            }
+
+            var incident = await _context.Incidents.SingleOrDefaultAsync(
+                incident => incident.Id == id, cancellationToken);
+            if (incident is null)
+            {
+                return NotFound();
+            }
+
+            if (!CanEditIncident(user, incident))
+            {
+                return Forbid();
+            }
+
+            if (incident.Status == IncidentStatus.Closed)
+            {
+                return Conflict(new { message = "Der Incident ist bereits geschlossen." });
+            }
+
+            incident.Status = IncidentStatus.Closed;
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return Ok(ToResponseDto(incident));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Problem(statusCode: StatusCodes.Status500InternalServerError,
+                title: "Der INcident konnte nicht geschlossen werden.");
+        }
+    }
+
+    private static bool CanEditIncident(User user, Incident incident)
+    {
+        return user.Role == UserRole.Administrator || incident.AssigneeId == user.Id;
+    }
+
+    private static IncidentResponseDto ToResponseDto(Incident incident)
+    {
+        return new IncidentResponseDto
+        {
+            Id = incident.Id,
+            ReporterId = incident.ReporterId,
+            AssigneeId = incident.AssigneeId,
+            Severity = incident.Severity,
+            Status = incident.Status,
+            Cve = incident.Cve,
+            System = incident.System,
+            Description = incident.Description,
+            CreatedAt = incident.CreatedAt
+        };
     }
 
     private async Task<User?> GetCurrentUserAsync(CancellationToken cancellationToken)
