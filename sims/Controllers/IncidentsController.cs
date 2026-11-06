@@ -258,6 +258,69 @@ public class IncidentsController : ControllerBase
         }
     }
 
+    //Incident eskalieren
+    [HttpPost("{id:int}/escalate")]
+    public async Task<ActionResult<IncidentResponseDto>> Escalate(
+        int id, EscalateIncidentRequestDto request, CancellationToken cancellationToken)
+    {
+        if (id <= 0 || request.NewAssigneeId <= 0)
+        {
+            return BadRequest(new { message = "Incident-ID und Bearbeiter-ID müssen größer als 0 sein." });
+        }
+
+        try
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync(
+                IsolationLevel.RepeatableRead, cancellationToken);
+
+            var user = await GetCurrentUserAsync(cancellationToken);
+            if (user is null || !user.IsActive || !Enum.IsDefined(user.Role))
+            {
+                return Forbid();
+            }
+
+            var incident = await _context.Incidents.SingleOrDefaultAsync(
+                incident => incident.Id == id, cancellationToken);
+            if (incident is null)
+            {
+                return NotFound();
+            }
+
+            if (!CanEditIncident(user, incident))
+            {
+                return Forbid();
+            }
+
+            if (incident.Status == IncidentStatus.Closed)
+            {
+                return Conflict(new { message = "Geschlossene Incidents dürfen nicht eskaliert werden." });
+            }
+
+            var assigneeExists = await _context.Users.AnyAsync(
+                assignee => assignee.Id == request.NewAssigneeId && assignee.IsActive, cancellationToken);
+            if (!assigneeExists)
+            {
+                return BadRequest(new { message = "Ein vorhandener aktiver Bearbeiter ist erforderlich." });
+            }
+
+            if (incident.AssigneeId == request.NewAssigneeId)
+            {
+                return Conflict(new { message = "Der neue BEarbeiter entspricht dem bisherigen Bearbeiter." });
+            }
+
+            incident.AssigneeId = request.NewAssigneeId;
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return Ok(ToResponseDto(incident));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Problem(statusCode: StatusCodes.Status500InternalServerError,
+                title: "Der Incident konnte nicht eskaliert werden.");
+        }
+    }
+
     private static bool CanEditIncident(User user, Incident incident)
     {
         return user.Role == UserRole.Administrator || incident.AssigneeId == user.Id;
