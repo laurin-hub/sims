@@ -1,14 +1,19 @@
 
 using Microsoft.EntityFrameworkCore;
 using sims.Data;
+using sims.Setup;
 
 namespace sims;
 
 public class Program
 {
-    public static void Main(string[] args)
+    //
+    public static async Task Main(string[] args)
     {
-        var builder = WebApplication.CreateBuilder(args);
+        var bootstrapAdmin = args.Contains("--bootstrap-admin", StringComparer.Ordinal);
+        var builder = WebApplication.CreateBuilder(bootstrapAdmin
+            ? args.Where(argument => argument != "--bootstrap-admin").ToArray()
+            : args);
 
         // Add services to the container.
 
@@ -28,6 +33,20 @@ public class Program
         builder.Services.AddOpenApi();
 
         var app = builder.Build();
+
+        if (bootstrapAdmin)
+        {
+            try
+            {
+                Environment.ExitCode = await InitialAdminBootstrap.RunAsync(app.Services, app.Environment);
+            }
+            finally
+            {
+                await app.DisposeAsync();
+            }
+
+            return;
+        }
 
         //HTTP request pipeline konfigurien
         if (app.Environment.IsDevelopment())
