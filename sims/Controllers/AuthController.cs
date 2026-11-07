@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using sims.Data;
 using sims.DTOs;
+using sims.Logging;
 using sims.Models;
 
 namespace sims.Controllers;
@@ -17,10 +18,17 @@ namespace sims.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly SimsDbContext _context;
+    private readonly IRedisLogService _redisLogService;
+    private readonly ILogger<AuthController> _logger;
 
-    public AuthController(SimsDbContext context)
+    public AuthController(
+        SimsDbContext context,
+        IRedisLogService redisLogService,
+        ILogger<AuthController> logger)
     {
         _context = context;
+        _redisLogService = redisLogService;
+        _logger = logger;
     }
 
     [AllowAnonymous]
@@ -90,6 +98,14 @@ public class AuthController : ControllerBase
                     AllowRefresh = false,
                     ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(30)
                 });
+
+            var stored = await _redisLogService.WriteAsync(LogLevel.Information,
+                $"User {user.Id} logged in successfully");
+            if (!stored)
+            {
+                _logger.LogWarning(
+                    "Anmeldung erfolgreich, Redis-Protokollierung jedoch nicht bestätigt. Die HTTP-Erfolgsbestätigung bleibt erhalten");
+            }
 
             return Ok(new { message = "Anmeldung erfolgreich." });
         }
