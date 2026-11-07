@@ -17,6 +17,8 @@ namespace sims.Controllers;
 [Route("api/auth")]
 public class AuthController : ControllerBase
 {
+    internal static readonly object FailedLoginLogAttemptedKey = new();
+
     private readonly SimsDbContext _context;
     private readonly IRedisLogService _redisLogService;
     private readonly ILogger<AuthController> _logger;
@@ -51,6 +53,7 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 100
             || string.IsNullOrEmpty(request.Password))
         {
+            await LogFailedLoginAsync();
             return Unauthorized(new { message = invalidCredentials });
         }
 
@@ -62,6 +65,7 @@ public class AuthController : ControllerBase
             if (user is null || !user.IsActive || string.IsNullOrEmpty(user.PasswordHash)
                 || !Enum.IsDefined(user.Role))
             {
+                await LogFailedLoginAsync();
                 return Unauthorized(new { message = invalidCredentials });
             }
 
@@ -73,11 +77,13 @@ public class AuthController : ControllerBase
             }
             catch (FormatException)
             {
+                await LogFailedLoginAsync();
                 return Unauthorized(new { message = invalidCredentials });
             }
 
             if (verificationResult == PasswordVerificationResult.Failed)
             {
+                await LogFailedLoginAsync();
                 return Unauthorized(new { message = invalidCredentials });
             }
 
@@ -114,6 +120,27 @@ public class AuthController : ControllerBase
             return Problem(
                 statusCode: StatusCodes.Status500InternalServerError,
                 title: "Die Anmeldung konnte nicht verarbeitet werden.");
+        }
+    }
+
+    private async Task LogFailedLoginAsync()
+    {
+        //Bei Redis-Ausfall keinen zweiten Logversuch auslösen
+        HttpContext.Items[FailedLoginLogAttemptedKey] = true;
+        var stored = false;
+        try
+        {
+            stored = await _redisLogService.WriteAsync(LogLevel.Warning, "Gescheiterter Login-Versuch");
+        }
+        catch (Exception)
+        {
+            // Logging-Fehler dürfen die ursprüngliche HTTP-Antwort nicht verändern
+        }
+
+        if (!stored)
+        {
+            _logger.LogWarning(
+                "Security-Ereignis nicht in Redis bestätigt. Die HTTP-Antwort bleibt unverändert.");
         }
     }
 }

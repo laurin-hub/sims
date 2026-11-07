@@ -155,6 +155,59 @@ public class Program
 
         app.UseHttpsRedirection();
 
+        //
+        app.Use(async (context, next) =>
+        {
+            await next(context);
+
+            var statusCode = context.Response.StatusCode;
+            if (!context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+                || (statusCode != StatusCodes.Status401Unauthorized
+                    && statusCode != StatusCodes.Status403Forbidden)
+                || context.Items.ContainsKey(sims.Controllers.AuthController.FailedLoginLogAttemptedKey))
+            {
+                return;
+            }
+
+            var method = context.Request.Method switch
+            {
+                "GET" => "GET",
+                "HEAD" => "HEAD",
+                "POST" => "POST",
+                "PUT" => "PUT",
+                "PATCH" => "PATCH",
+                "DELETE" => "DELETE",
+                "OPTIONS" => "OPTIONS",
+                "TRACE" => "TRACE",
+                "CONNECT" => "CONNECT",
+                _ => "OTHER"
+            };
+            var message = $"API access denied: HTTP {statusCode}, method {method}";
+            if (context.User.Identity?.IsAuthenticated == true
+                && int.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
+                && userId > 0)
+            {
+                message += $", user {userId}";
+            }
+
+            var stored = false;
+            try
+            {
+                var redisLogService = context.RequestServices.GetRequiredService<IRedisLogService>();
+                stored = await redisLogService.WriteAsync(LogLevel.Warning, message + ".");
+            }
+            catch (Exception)
+            {
+                // es werden keine Exceptiondetails gespeichert und die 401/403-Antwort bleibt erhalten.
+            }
+
+            if (!stored)
+            {
+                app.Logger.LogWarning(
+                    "Security-Ereignis nicht in Redis bestätigt. Die HTTP-Antwort bleibt unverändert.");
+            }
+        });
+
         app.UseAuthentication();
         app.UseAuthorization();
 
