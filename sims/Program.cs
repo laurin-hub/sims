@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
 using sims.Data;
 using sims.Setup;
+using sims.Logging;
+using StackExchange.Redis;
 
 namespace sims;
 
@@ -30,6 +32,27 @@ public class Program
 
         builder.Services.AddDbContext<SimsDbContext>(options =>
             options.UseSqlServer(connectionString));
+
+        builder.Services.AddSingleton<Func<Task<IConnectionMultiplexer>>>(_ => async () =>
+        {
+            var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+            if (string.IsNullOrWhiteSpace(redisConnectionString))
+            {
+                throw new InvalidOperationException("ConnectionStrings:Redis fehlt oder ist leer.");
+            }
+
+            var options = ConfigurationOptions.Parse(redisConnectionString);
+            options.AbortOnConnectFail = false;
+            options.ConnectTimeout = 2000;
+            options.ConnectRetry = 1;
+            options.AsyncTimeout = 2000;
+            options.SyncTimeout = 2000;
+            options.BacklogPolicy = BacklogPolicy.FailFast;
+            options.IncludeDetailInExceptions = false;
+
+            return await ConnectionMultiplexer.ConnectAsync(options);
+        });
+        builder.Services.AddSingleton<IRedisLogService, RedisLogService>();
 
         builder.Services.AddControllersWithViews(options =>
         {
