@@ -197,6 +197,83 @@ public class UsersController : ControllerBase
         }
     }
 
+    [HttpPatch("{id:int}/disable")]
+    [Authorize(Roles = nameof(UserRole.Administrator))]
+    public async Task<ActionResult<UserResponseDto>> Disable(int id, CancellationToken cancellationToken)
+    {
+        if (id <= 0)
+        {
+            return BadRequest(new { message = "Die Benutze-ID muss größer als 0 sein." });
+        }
+
+        if (!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var administratorId)
+            || administratorId <= 0)
+        {
+            return Forbid();
+        }
+
+        try
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable, cancellationToken);
+
+            var isActiveAdministrator = await _context.Users.AnyAsync(
+                user => user.Id == administratorId && user.IsActive
+                    && user.Role == UserRole.Administrator, cancellationToken);
+            if (!isActiveAdministrator)
+            {
+                return Forbid();
+            }
+
+            var user = await _context.Users.SingleOrDefaultAsync(
+                user => user.Id == id, cancellationToken);
+            if (user is null)
+            {
+                return NotFound();
+            }
+
+            if (!user.IsActive)
+            {
+                return Conflict(new { message = "Der Benutzer ist bereits deaktiviert." });
+            }
+
+            if (user.Id == administratorId)
+            {
+                return Conflict(new { message = "Das eigene Administratokonto darf nicht deaktiviert werden." });
+            }
+
+            if (user.Role == UserRole.Administrator)
+            {
+                var anotherAdministratorExists = await _context.Users.AnyAsync(
+                    other => other.Id != id && other.IsActive
+                        && other.Role == UserRole.Administrator, cancellationToken);
+                if (!anotherAdministratorExists)
+                {
+                    return Conflict(new { message = "Der letzte aktive Administrator darf nicht deaktiviert werden." });
+                }
+            }
+
+            user.IsActive = false;
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return Ok(new UserResponseDto
+            {
+                Id = user.Id,
+                Username = user.Username,
+                Role = user.Role,
+                SupportLevel = user.SupportLevel,
+                IsActive = user.IsActive
+            });
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status500InternalServerError,
+                title: "Der Benutzer konnte nicht deaktiviert werden.");
+        }
+    }
+
     [HttpGet]
     [Authorize(Roles = nameof(UserRole.Administrator))]
     public async Task<ActionResult<List<UserResponseDto>>> Get(CancellationToken cancellationToken)
@@ -221,7 +298,7 @@ public class UsersController : ControllerBase
         {
             return Problem(
                 statusCode: StatusCodes.Status500InternalServerError,
-                title: "Die Benutzer konnten nicht geladen werden.");
+                title: "Die BEnutzer konnten nicht geladen werden.");
         }
     }
 }
