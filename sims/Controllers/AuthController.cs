@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using sims.Data;
 using sims.DTOs;
+using sims.Logging;
 using sims.Models;
 
 namespace sims.Controllers;
@@ -16,11 +17,20 @@ namespace sims.Controllers;
 [Route("api/auth")]
 public class AuthController : ControllerBase
 {
-    private readonly SimsDbContext _context;
+    internal static readonly object FailedLoginLogAttemptedKey = new();
 
-    public AuthController(SimsDbContext context)
+    private readonly SimsDbContext _context;
+    private readonly IRedisLogService _redisLogService;
+    private readonly ILogger<AuthController> _logger;
+
+    public AuthController(
+        SimsDbContext context,
+        IRedisLogService redisLogService,
+        ILogger<AuthController> logger)
     {
         _context = context;
+        _redisLogService = redisLogService;
+        _logger = logger;
     }
 
     [AllowAnonymous]
@@ -43,6 +53,7 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 100
             || string.IsNullOrEmpty(request.Password))
         {
+            await LogFailedLoginAsync();
             return Unauthorized(new { message = invalidCredentials });
         }
 
@@ -54,6 +65,7 @@ public class AuthController : ControllerBase
             if (user is null || !user.IsActive || string.IsNullOrEmpty(user.PasswordHash)
                 || !Enum.IsDefined(user.Role))
             {
+                await LogFailedLoginAsync();
                 return Unauthorized(new { message = invalidCredentials });
             }
 
@@ -65,11 +77,13 @@ public class AuthController : ControllerBase
             }
             catch (FormatException)
             {
+                await LogFailedLoginAsync();
                 return Unauthorized(new { message = invalidCredentials });
             }
 
             if (verificationResult == PasswordVerificationResult.Failed)
             {
+                await LogFailedLoginAsync();
                 return Unauthorized(new { message = invalidCredentials });
             }
 
@@ -91,6 +105,14 @@ public class AuthController : ControllerBase
                     ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(30)
                 });
 
+            var stored = await _redisLogService.WriteAsync(LogLevel.Information,
+                $"User {user.Id} logged in successfully");
+            if (!stored)
+            {
+                _logger.LogWarning(
+                    "Anmeldung erfolgreich, Redis-Protokollierung jedoch nicht bestätigt. Die HTTP-Erfolgsbestätigung bleibt erhalten");
+            }
+
             return Ok(new { message = "Anmeldung erfolgreich." });
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -98,6 +120,27 @@ public class AuthController : ControllerBase
             return Problem(
                 statusCode: StatusCodes.Status500InternalServerError,
                 title: "Die Anmeldung konnte nicht verarbeitet werden.");
+        }
+    }
+
+    private async Task LogFailedLoginAsync()
+    {
+        //Bei Redis-Ausfall keinen zweiten Logversuch auslösen
+        HttpContext.Items[FailedLoginLogAttemptedKey] = true;
+        var stored = false;
+        try
+        {
+            stored = await _redisLogService.WriteAsync(LogLevel.Warning, "Gescheiterter Login-Versuch");
+        }
+        catch (Exception)
+        {
+            // Logging-Fehler dürfen die ursprüngliche HTTP-Antwort nicht verändern
+        }
+
+        if (!stored)
+        {
+            _logger.LogWarning(
+                "Security-Ereignis nicht in Redis bestätigt. Die HTTP-Antwort bleibt unverändert.");
         }
     }
 }

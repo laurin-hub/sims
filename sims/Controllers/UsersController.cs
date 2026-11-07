@@ -7,6 +7,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using sims.Data;
 using sims.DTOs;
+using sims.Logging;
 using sims.Models;
 
 namespace sims.Controllers;
@@ -16,10 +17,17 @@ namespace sims.Controllers;
 public class UsersController : ControllerBase
 {
     private readonly SimsDbContext _context;
+    private readonly IRedisLogService _redisLogService;
+    private readonly ILogger<UsersController> _logger;
 
-    public UsersController(SimsDbContext context)
+    public UsersController(
+        SimsDbContext context,
+        IRedisLogService redisLogService,
+        ILogger<UsersController> logger)
     {
         _context = context;
+        _redisLogService = redisLogService;
+        _logger = logger;
     }
 
     [HttpPost]
@@ -45,6 +53,12 @@ public class UsersController : ControllerBase
             return BadRequest(new { message = "Rolle oder Support-Level ist ungültig." });
         }
 
+        if (!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var administratorId)
+            || administratorId <= 0)
+        {
+            return Forbid();
+        }
+
         const string usernameConflict = "Der Benutzername ist bereits vergeben.";
 
         try
@@ -67,6 +81,8 @@ public class UsersController : ControllerBase
 
             _context.Users.Add(user);
             await _context.SaveChangesAsync(cancellationToken);
+
+            await LogUserActionAsync($"User {user.Id} created by administrator {administratorId}.");
 
             var response = new UserResponseDto
             {
@@ -175,6 +191,8 @@ public class UsersController : ControllerBase
             await _context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
+            await LogUserActionAsync($"User {user.Id} updated by administrator {administratorId}.");
+
             return Ok(new UserResponseDto
             {
                 Id = user.Id,
@@ -257,6 +275,8 @@ public class UsersController : ControllerBase
             await _context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
+            await LogUserActionAsync($"User {user.Id} disabled by administrator {administratorId}.");
+
             return Ok(new UserResponseDto
             {
                 Id = user.Id,
@@ -271,6 +291,17 @@ public class UsersController : ControllerBase
             return Problem(
                 statusCode: StatusCodes.Status500InternalServerError,
                 title: "Der Benutzer konnte nicht deaktiviert werden.");
+        }
+    }
+
+    private async Task LogUserActionAsync(string message)
+    {
+        var stored = await _redisLogService.WriteAsync(LogLevel.Information, message);
+        if (!stored)
+        {
+            // Der Service behandelt Redis-Fehler; die SQL-Änderung ist bereits bestätigt.
+            _logger.LogWarning(
+                "Benutzeraktion in SQL Server gespeichrt, Redis-Protokollierung jedoch nicht bestätigt. Die HTTP-Erfolgsbestätigung bleibt erhalten.");
         }
     }
 

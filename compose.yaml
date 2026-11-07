@@ -10,6 +10,23 @@ services:
     volumes:
       - sims_sql_data:/var/opt/mssql
 
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "127.0.0.1:16379:6379"
+    volumes:
+      - sims_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
 volumes:
   sims_sql_data:
     name: sims_sql_data
+  sims_redis_data:
+    name: sims_redis_data

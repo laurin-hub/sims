@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using sims.Data;
 using sims.DTOs;
+using sims.Logging;
 using sims.Models;
 
 namespace sims.Controllers;
@@ -15,10 +16,17 @@ namespace sims.Controllers;
 public class IncidentsController : ControllerBase
 {
     private readonly SimsDbContext _context;
+    private readonly IRedisLogService _redisLogService;
+    private readonly ILogger<IncidentsController> _logger;
 
-    public IncidentsController(SimsDbContext context)
+    public IncidentsController(
+        SimsDbContext context,
+        IRedisLogService redisLogService,
+        ILogger<IncidentsController> logger)
     {
         _context = context;
+        _redisLogService = redisLogService;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -117,6 +125,9 @@ public class IncidentsController : ControllerBase
             _context.Incidents.Add(incident);
             await _context.SaveChangesAsync(cancellationToken);
 
+            await LogIncidentAsync(LogLevel.Information,
+                $"Incident {incident.Id} created by user {incident.ReporterId}, assigned to user {incident.AssigneeId}.");
+
             var response = new IncidentResponseDto
             {
                 Id = incident.Id,
@@ -200,6 +211,9 @@ public class IncidentsController : ControllerBase
             await _context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
+            await LogIncidentAsync(LogLevel.Information,
+                $"Incident {incident.Id} updated by user {user.Id}.");
+
             return Ok(ToResponseDto(incident));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -248,6 +262,9 @@ public class IncidentsController : ControllerBase
             incident.Status = IncidentStatus.Closed;
             await _context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+
+            await LogIncidentAsync(LogLevel.Information,
+                $"Incident {incident.Id} closed by user {user.Id}.");
 
             return Ok(ToResponseDto(incident));
         }
@@ -308,16 +325,31 @@ public class IncidentsController : ControllerBase
                 return Conflict(new { message = "Der neue BEarbeiter entspricht dem bisherigen Bearbeiter." });
             }
 
+            var previousAssigneeId = incident.AssigneeId;
             incident.AssigneeId = request.NewAssigneeId;
             await _context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+
+            await LogIncidentAsync(LogLevel.Warning,
+                $"Incident {incident.Id} escaláted by user {user.Id} from assignee {previousAssigneeId} to asignee {incident.AssigneeId}.");
 
             return Ok(ToResponseDto(incident));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return Problem(statusCode: StatusCodes.Status500InternalServerError,
-                title: "Der Incident konnte nicht eskaliert werden.");
+                title: "Der Incident konnte nicht eskaliert werden");
+        }
+    }
+
+    private async Task LogIncidentAsync(LogLevel logLevel, string message)
+    {
+        var stored = await _redisLogService.WriteAsync(logLevel, message);
+        if (!stored)
+        {
+            // Der Service behandelt Redis-Fehler; die SQL-Änderung ist bereits bestätigt.
+            _logger.LogWarning(
+                "Incident-Aktion in SQL Server gespeichert, Redis-Protokollierung jedoch nicht bestätigt. Die HTTP-Erfolgsbestätigung bleibt erhalten.");
         }
     }
 

@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
 using sims.Data;
 using sims.Setup;
+using sims.Logging;
+using StackExchange.Redis;
 
 namespace sims;
 
@@ -30,6 +32,27 @@ public class Program
 
         builder.Services.AddDbContext<SimsDbContext>(options =>
             options.UseSqlServer(connectionString));
+
+        builder.Services.AddSingleton<Func<Task<IConnectionMultiplexer>>>(_ => async () =>
+        {
+            var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+            if (string.IsNullOrWhiteSpace(redisConnectionString))
+            {
+                throw new InvalidOperationException("ConnectionStrings:Redis fehlt oder ist leer.");
+            }
+
+            var options = ConfigurationOptions.Parse(redisConnectionString);
+            options.AbortOnConnectFail = false;
+            options.ConnectTimeout = 2000;
+            options.ConnectRetry = 1;
+            options.AsyncTimeout = 2000;
+            options.SyncTimeout = 2000;
+            options.BacklogPolicy = BacklogPolicy.FailFast;
+            options.IncludeDetailInExceptions = false;
+
+            return await ConnectionMultiplexer.ConnectAsync(options);
+        });
+        builder.Services.AddSingleton<IRedisLogService, RedisLogService>();
 
         builder.Services.AddControllersWithViews(options =>
         {
@@ -123,6 +146,57 @@ public class Program
             app.MapOpenApi();
         }
 
+        // Äußerhalb vom Exception Handler auch dessen fertige 500-Antwort erfassen.
+        app.Use(async (context, next) =>
+        {
+            await next(context);
+
+            if (context.RequestAborted.IsCancellationRequested
+                || !context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+                || context.Response.StatusCode != StatusCodes.Status500InternalServerError)
+            {
+                return;
+            }
+
+            var method = context.Request.Method switch
+            {
+                "GET" => "GET",
+                "HEAD" => "HEAD",
+                "POST" => "POST",
+                "PUT" => "PUT",
+                "PATCH" => "PATCH",
+                "DELETE" => "DELETE",
+                "OPTIONS" => "OPTIONS",
+                "TRACE" => "TRACE",
+                "CONNECT" => "CONNECT",
+                _ => "OTHER"
+            };
+            var message = $"API technical error: HTTP 500, method {method}";
+            if (context.User.Identity?.IsAuthenticated == true
+                && int.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
+                && userId > 0)
+            {
+                message += $", user {userId}";
+            }
+
+            var stored = false;
+            try
+            {
+                var redisLogService = context.RequestServices.GetRequiredService<IRedisLogService>();
+                stored = await redisLogService.WriteAsync(LogLevel.Error, message + ".");
+            }
+            catch (Exception)
+            {
+                //Logging-Fehler ohne sensible Details behandeln, HTTP-Antwort nicht verändern
+            }
+
+            if (!stored)
+            {
+                app.Logger.LogError(
+                    "Technisches API-Fehlerereignis nicht in Redis bestätigt. Die HTTP-500-Antwort bleibt unverändert.");
+            }
+        });
+
         app.UseExceptionHandler(errorApp =>
         {
             errorApp.Run(context => Results.Problem(
@@ -131,6 +205,59 @@ public class Program
         });
 
         app.UseHttpsRedirection();
+
+        //
+        app.Use(async (context, next) =>
+        {
+            await next(context);
+
+            var statusCode = context.Response.StatusCode;
+            if (!context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+                || (statusCode != StatusCodes.Status401Unauthorized
+                    && statusCode != StatusCodes.Status403Forbidden)
+                || context.Items.ContainsKey(sims.Controllers.AuthController.FailedLoginLogAttemptedKey))
+            {
+                return;
+            }
+
+            var method = context.Request.Method switch
+            {
+                "GET" => "GET",
+                "HEAD" => "HEAD",
+                "POST" => "POST",
+                "PUT" => "PUT",
+                "PATCH" => "PATCH",
+                "DELETE" => "DELETE",
+                "OPTIONS" => "OPTIONS",
+                "TRACE" => "TRACE",
+                "CONNECT" => "CONNECT",
+                _ => "OTHER"
+            };
+            var message = $"API access denied: HTTP {statusCode}, method {method}";
+            if (context.User.Identity?.IsAuthenticated == true
+                && int.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
+                && userId > 0)
+            {
+                message += $", user {userId}";
+            }
+
+            var stored = false;
+            try
+            {
+                var redisLogService = context.RequestServices.GetRequiredService<IRedisLogService>();
+                stored = await redisLogService.WriteAsync(LogLevel.Warning, message + ".");
+            }
+            catch (Exception)
+            {
+                // es werden keine Exceptiondetails gespeichert und die 401/403-Antwort bleibt erhalten.
+            }
+
+            if (!stored)
+            {
+                app.Logger.LogWarning(
+                    "Security-Ereignis nicht in Redis bestätigt. Die HTTP-Antwort bleibt unverändert.");
+            }
+        });
 
         app.UseAuthentication();
         app.UseAuthorization();
