@@ -146,6 +146,57 @@ public class Program
             app.MapOpenApi();
         }
 
+        // Äußerhalb vom Exception Handler auch dessen fertige 500-Antwort erfassen.
+        app.Use(async (context, next) =>
+        {
+            await next(context);
+
+            if (context.RequestAborted.IsCancellationRequested
+                || !context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+                || context.Response.StatusCode != StatusCodes.Status500InternalServerError)
+            {
+                return;
+            }
+
+            var method = context.Request.Method switch
+            {
+                "GET" => "GET",
+                "HEAD" => "HEAD",
+                "POST" => "POST",
+                "PUT" => "PUT",
+                "PATCH" => "PATCH",
+                "DELETE" => "DELETE",
+                "OPTIONS" => "OPTIONS",
+                "TRACE" => "TRACE",
+                "CONNECT" => "CONNECT",
+                _ => "OTHER"
+            };
+            var message = $"API technical error: HTTP 500, method {method}";
+            if (context.User.Identity?.IsAuthenticated == true
+                && int.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
+                && userId > 0)
+            {
+                message += $", user {userId}";
+            }
+
+            var stored = false;
+            try
+            {
+                var redisLogService = context.RequestServices.GetRequiredService<IRedisLogService>();
+                stored = await redisLogService.WriteAsync(LogLevel.Error, message + ".");
+            }
+            catch (Exception)
+            {
+                //Logging-Fehler ohne sensible Details behandeln, HTTP-Antwort nicht verändern
+            }
+
+            if (!stored)
+            {
+                app.Logger.LogError(
+                    "Technisches API-Fehlerereignis nicht in Redis bestätigt. Die HTTP-500-Antwort bleibt unverändert.");
+            }
+        });
+
         app.UseExceptionHandler(errorApp =>
         {
             errorApp.Run(context => Results.Problem(
