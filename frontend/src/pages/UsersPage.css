@@ -1,0 +1,47 @@
+/* UsersPage - Benutzerverwaltung */
+
+.dash-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  font-size: 20px;
+}
+
+.panel-title {
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  margin-bottom: 18px;
+}
+
+.notice-error .btn-small {
+  margin-left: 10px;
+  vertical-align: baseline;
+}
+
+.users-grid {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 16px;
+  margin-top: 24px;
+  align-items: start;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.modal-title {
+  margin-bottom: 18px;
+}
+
+@media (max-width: 960px) {
+  .users-grid {
+    grid-template-columns: 1fr;
+  }
+}
