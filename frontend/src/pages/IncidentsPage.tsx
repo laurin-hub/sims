@@ -5,6 +5,7 @@ import { ApiError } from "../api/http";
 import { useAuth } from "../auth/AuthContext";
 import { IncidentStatus, Severity } from "../types/api";
 import type { CreateIncidentRequest, IncidentResponse } from "../types/api";
+import type { FormEvent } from "react";
 import { severityCss, severityLabel, statusCss, statusLabel } from "../utils/labels";
 import "./IncidentsPage.css";
 
@@ -35,7 +36,7 @@ function apiErrorMessage(error: unknown, fallback: string): string {
  * Statuswechsel nur New -> Active; Schliessen nur ueber /close).
  */
 export default function IncidentsPage(): JSX.Element {
-  const { isAdmin } = useAuth();
+  const { isAdmin, roleKnown } = useAuth();
 
   const [incidents, setIncidents] = useState<IncidentResponse[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -80,12 +81,6 @@ export default function IncidentsPage(): JSX.Element {
     };
   }, [tick]);
 
-  useEffect(() => {
-    if (flash === null) return;
-    const id = window.setTimeout(() => setFlash(null), 5000);
-    return () => window.clearTimeout(id);
-  }, [flash]);
-
   /**
    * Berechtigung gemaess Backend (CanEditIncident): Bearbeiter oder
    * Administrator. Da die API keine User-ID auf den angemeldeten Benutzer
@@ -97,7 +92,18 @@ export default function IncidentsPage(): JSX.Element {
     return isAdmin;
   }
 
-  async function handleCreate(): Promise<void> {
+  /** Hint fuer gesperrte Aktionen (Rolle unbekannt vs. Nicht-Admin). */
+  function actionTitle(closed: boolean): string {
+    if (closed) return "Geschlossene Incidents sind gesperrt.";
+    if (!roleKnown) return "Rolle wird noch ermittelt…";
+    return "Diese Aktion steht nur Administratoren oder dem zugewiesenen Bearbeiter offen (Server-pruefung).";
+  }
+
+  async function handleCreate(event: FormEvent<HTMLFormElement>): Promise<void> {
+    // Verhindert die native Formular-Standardaktion (GET-Submit mit Query-String).
+    event.preventDefault();
+    // Doppeluebermittlungen unterbinden, waehrend die Anfrage laeuft.
+    if (creating) return;
     const assigneeId = Number(form.assigneeId);
     if (!Number.isInteger(assigneeId) || assigneeId <= 0) {
       setActionError("Gültige Bearbeiter-ID (ganze Zahl > 0) erforderlich.");
@@ -115,9 +121,11 @@ export default function IncidentsPage(): JSX.Element {
       } satisfies CreateIncidentRequest);
       setForm(EMPTY_FORM);
       setFlash("Incident wurde angelegt.");
+      setActionError(null);
       reload();
     } catch (error) {
       setActionError(apiErrorMessage(error, "Der Incident konnte nicht angelegt werden."));
+      setFlash(null);
     } finally {
       setCreating(false);
     }
@@ -143,9 +151,11 @@ export default function IncidentsPage(): JSX.Element {
       });
       setEditing(null);
       setFlash("Incident wurde aktualisiert.");
+      setActionError(null);
       reload();
     } catch (error) {
       setActionError(apiErrorMessage(error, "Der Incident konnte nicht bearbeitet werden."));
+      setFlash(null);
     } finally {
       setBusy(false);
     }
@@ -159,9 +169,11 @@ export default function IncidentsPage(): JSX.Element {
       await incidentsApi.close(closing.id);
       setClosing(null);
       setFlash("Incident wurde geschlossen.");
+      setActionError(null);
       reload();
     } catch (error) {
       setActionError(apiErrorMessage(error, "Der Incident konnte nicht geschlossen werden."));
+      setFlash(null);
     } finally {
       setBusy(false);
     }
@@ -181,9 +193,11 @@ export default function IncidentsPage(): JSX.Element {
       setEscalating(null);
       setNewAssigneeId("");
       setFlash("Incident wurde eskaliert.");
+      setActionError(null);
       reload();
     } catch (error) {
       setActionError(apiErrorMessage(error, "Der Incident konnte nicht eskaliert werden."));
+      setFlash(null);
     } finally {
       setBusy(false);
     }
@@ -200,10 +214,17 @@ export default function IncidentsPage(): JSX.Element {
         )}
         <div className="notice notice-error banner" role="alert">
           {loadError}
+          <button
+            type="button"
+            className="btn btn-small notice-dismiss"
+            onClick={() => {
+              setLoadError(null);
+              reload();
+            }}
+          >
+            Erneut versuchen
+          </button>
         </div>
-        <button type="button" className="btn btn-small" onClick={reload}>
-          Erneut versuchen
-        </button>
       </section>
     );
   }
@@ -222,19 +243,40 @@ export default function IncidentsPage(): JSX.Element {
           {forbiddenNote}
         </div>
       )}
+      {roleKnown && !isAdmin && incidents !== null && incidents.length > 0 && (
+        <div className="notice banner" role="note">
+          Als normaler Benutzer koennen Sie nur Vorfaelle bearbeiten, eskalieren
+          oder schliessen, die Ihnen als Bearbeiter zugewiesen sind. Die
+          Serverpruefung entscheidet verbindlich.
+        </div>
+      )}
       {flash !== null && (
         <div className="notice notice-success banner" role="status">
           {flash}
+          <button
+            type="button"
+            className="btn btn-small notice-dismiss"
+            onClick={() => setFlash(null)}
+          >
+            Quittieren
+          </button>
         </div>
       )}
       {actionError !== null && (
-        <p className="error-text" role="alert">
+        <div className="notice notice-error banner" role="alert">
           {actionError}
-        </p>
+          <button
+            type="button"
+            className="btn btn-small notice-dismiss"
+            onClick={() => setActionError(null)}
+          >
+            Quittieren
+          </button>
+        </div>
       )}
 
       <div className="incidents-grid">
-        <form className="panel" onSubmit={() => void handleCreate()}>
+        <form className="panel" onSubmit={(event) => void handleCreate(event)}>
           <h3 className="panel-title">Incident erfassen</h3>
 
           <div className="field">
@@ -365,6 +407,7 @@ export default function IncidentsPage(): JSX.Element {
                             type="button"
                             className="btn btn-small"
                             disabled={!editable || closed}
+                            title={actionTitle(closed)}
                             onClick={() => setEditing({ ...incident })}
                           >
                             Bearbeiten
@@ -373,6 +416,7 @@ export default function IncidentsPage(): JSX.Element {
                             type="button"
                             className="btn btn-small"
                             disabled={!editable || closed}
+                            title={actionTitle(closed)}
                             onClick={() => {
                               setNewAssigneeId("");
                               setEscalating(incident);
@@ -384,6 +428,7 @@ export default function IncidentsPage(): JSX.Element {
                             type="button"
                             className="btn btn-small btn-danger"
                             disabled={!editable || closed}
+                            title={actionTitle(closed)}
                             onClick={() => setClosing(incident)}
                           >
                             Schließen

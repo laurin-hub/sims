@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import Modal from "../components/Modal";
 import { resetCsrfToken } from "../api/http";
 import { usersApi } from "../api/endpoints";
@@ -69,13 +70,11 @@ export default function UsersPage(): JSX.Element {
     };
   }, [tick, currentUsername, reportIdentity]);
 
-  useEffect(() => {
-    if (flash === null) return;
-    const id = window.setTimeout(() => setFlash(null), 5000);
-    return () => window.clearTimeout(id);
-  }, [flash]);
-
-  async function handleCreate(): Promise<void> {
+  async function handleCreate(event: FormEvent<HTMLFormElement>): Promise<void> {
+    // Verhindert die native Formular-Standardaktion (GET-Submit mit Query-String).
+    event.preventDefault();
+    // Doppeluebermittlungen unterbinden, waehrend die Anfrage laeuft.
+    if (creating) return;
     setCreating(true);
     setActionError(null);
     try {
@@ -166,16 +165,30 @@ export default function UsersPage(): JSX.Element {
       {flash !== null && (
         <div className="notice notice-success banner" role="status">
           {flash}
+          <button
+            type="button"
+            className="btn btn-small notice-dismiss"
+            onClick={() => setFlash(null)}
+          >
+            Quittieren
+          </button>
         </div>
       )}
       {actionError !== null && (
-        <p className="error-text" role="alert">
+        <div className="notice notice-error banner" role="alert">
           {actionError}
-        </p>
+          <button
+            type="button"
+            className="btn btn-small notice-dismiss"
+            onClick={() => setActionError(null)}
+          >
+            Quittieren
+          </button>
+        </div>
       )}
 
       <div className="users-grid">
-        <form className="panel" onSubmit={() => void handleCreate()}>
+        <form className="panel" onSubmit={(event) => void handleCreate(event)}>
           <h3 className="panel-title">Benutzer anlegen</h3>
 
           <div className="field">
@@ -347,7 +360,7 @@ export default function UsersPage(): JSX.Element {
       {disableTarget !== null && (
         <Modal
           title="Benutzer deaktivieren"
-          description={`Soll "${disableTarget.username}" wirklich deaktiviert werden? Der Zugriff wird sofort entzogen. Ein Reaktivieren ist über die API nicht möglich.`}
+          description={`Soll '${disableTarget.username}' wirklich deaktiviert werden? Der Zugriff wird sofort entzogen. Ein Reaktivieren ist ueber die API nicht moeglich.`}
           confirmLabel="Deaktivieren"
           danger
           busy={busy}
