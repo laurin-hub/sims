@@ -6,6 +6,7 @@ import type {
   IncidentResponse,
   LoginRequest,
   MessageResponse,
+  ReopenIncidentRequest,
   UpdateIncidentRequest,
   UpdateUserRequest,
   UserResponse
@@ -69,6 +70,19 @@ export const incidentsApi = {
 
   close(id: number, signal?: AbortSignal): Promise<IncidentResponse> {
     return http.post<IncidentResponse>(`/incidents/${id}/close`, undefined, signal);
+  },
+
+  /**
+   * Nur fuer Administratoren ([Authorize(Roles=Administrator)]).
+   * Pflichtbegruendung (max. 1000 Zeichen, keine Steuerzeichen/Umbrueche);
+   * fuehrt Closed -> Active aus.
+   */
+  reopen(
+    id: number,
+    request: ReopenIncidentRequest,
+    signal?: AbortSignal
+  ): Promise<IncidentResponse> {
+    return http.post<IncidentResponse>(`/incidents/${id}/reopen`, request, signal);
   },
 
   escalate(

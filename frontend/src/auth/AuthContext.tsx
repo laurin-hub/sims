@@ -9,7 +9,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { authApi } from "../api/endpoints";
-import { ApiError, invalidateSession, onUnauthorized } from "../api/http";
+import { ApiError, invalidateSession, onUnauthorized, resetCsrfToken } from "../api/http";
 import { usersApi } from "../api/endpoints";
 import type { LoginRequest, UserRole } from "../types/api";
 
@@ -77,6 +77,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (request: LoginRequest) => {
     await authApi.login(request);
+    // Login eroeffnet serverseitig eine neue (authentifizierten) Sitzung. Der
+    // ggf. gecachte CSRF-Token gehoert zur anonymen Sitzung davor und ist mit
+    // dem neuen Authentifizierungs-Cookie nicht mehr gueltig -> verwerfen,
+    // damit der naechste schreibende Aufruf einen frischen Token holt.
+    resetCsrfToken();
     // Rolle ist nach dem Login unbekannt; die Rollenermittlung erfolgt
     // automatisch ueber den Benutzerlisten-Test (siehe unten).
     const next: StoredAuth = { username: request.username, isAdmin: null };

@@ -107,6 +107,11 @@ export interface EscalateIncidentRequest {
   newAssigneeId: number;
 }
 
+/** Grund fuer das Wiedereroeffnen eines geschlossenen Incidents (Pflicht, max. 1000 Zeichen). */
+export interface ReopenIncidentRequest {
+  reason: string;
+}
+
 /** Fehlerformat: { message } (Validierung/Konflikt) oder RFC-7807 Problem-Details. */
 export interface ProblemDetails {
   type?: string;

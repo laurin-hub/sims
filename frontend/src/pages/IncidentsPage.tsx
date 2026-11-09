@@ -52,6 +52,8 @@ export default function IncidentsPage(): JSX.Element {
   const [closing, setClosing] = useState<IncidentResponse | null>(null);
   const [escalating, setEscalating] = useState<IncidentResponse | null>(null);
   const [newAssigneeId, setNewAssigneeId] = useState("");
+  const [reopening, setReopening] = useState<IncidentResponse | null>(null);
+  const [reopenReason, setReopenReason] = useState("");
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => setTick((current) => current + 1), []);
@@ -197,6 +199,37 @@ export default function IncidentsPage(): JSX.Element {
       reload();
     } catch (error) {
       setActionError(apiErrorMessage(error, "Der Incident konnte nicht eskaliert werden."));
+      setFlash(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReopen(): Promise<void> {
+    if (reopening === null) return;
+    const reason = reopenReason.trim();
+    // Clientseitige Validierung entsprechend dem Backend (ReopenIncidentRequestDto).
+    if (reason === "") {
+      setActionError("Eine Begründung ist erforderlich.");
+      return;
+    }
+    if (reason.length > 1000) {
+      setActionError("Die Begründung darf höchstens 1000 Zeichen enthalten.");
+      return;
+    }
+    // Doppeluebermittlungen waehrend der laufenden Anfrage verhindern.
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await incidentsApi.reopen(reopening.id, { reason });
+      setReopening(null);
+      setReopenReason("");
+      setFlash(`Incident #${reopening.id} wurde wiedereröffnet.`);
+      setActionError(null);
+      reload();
+    } catch (error) {
+      setActionError(apiErrorMessage(error, "Der Incident konnte nicht wiedereröffnet werden."));
       setFlash(null);
     } finally {
       setBusy(false);
@@ -433,6 +466,20 @@ export default function IncidentsPage(): JSX.Element {
                           >
                             Schließen
                           </button>
+                          {closed && isAdmin ? (
+                            <button
+                              type="button"
+                              className="btn btn-small"
+                              title="Geschlossenen Incident wiedereroeffnen (nur Administratoren)"
+                              onClick={() => {
+                                setReopenReason("");
+                                setActionError(null);
+                                setReopening(incident);
+                              }}
+                            >
+                              Wieder öffnen
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     );
@@ -498,6 +545,34 @@ export default function IncidentsPage(): JSX.Element {
             />
             <span className="field-hint">
               Bisheriger Bearbeiter: #{escalating.assigneeId}
+            </span>
+          </div>
+        </Modal>
+      )}
+      {reopening !== null && (
+        <Modal
+          title={`Incident #${reopening.id} wiedereroeffnen`}
+          description="Der Vorfall wird von Geschlossen zurueck auf Aktiv gesetzt. Eine Begruendung ist Pflicht und wird im Server-Protokoll erfasst."
+          confirmLabel="Wiedereroeffnen"
+          busy={busy}
+          onClose={() => setReopening(null)}
+          onConfirm={() => void handleReopen()}
+        >
+          <div className="field">
+            <label className="field-label" htmlFor="reopen-reason">
+              Begruendung
+            </label>
+            <textarea
+              id="reopen-reason"
+              required
+              maxLength={1000}
+              autoFocus
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+            />
+            <span className="field-hint">
+              {reopenReason.trim().length} / 1000 Zeichen. Steuerzeichen und
+              Zeilenumbrueiche sind nicht erlaubt.
             </span>
           </div>
         </Modal>
