@@ -275,6 +275,69 @@ public class IncidentsController : ControllerBase
         }
     }
 
+    [HttpPost("{id:int}/reopen")]
+    [Authorize(Roles = nameof(UserRole.Administrator))]
+    public async Task<ActionResult<IncidentResponseDto>> Reopen(
+        int id, ReopenIncidentRequestDto request, CancellationToken cancellationToken)
+    {
+        if (id <= 0)
+        {
+            return BadRequest(new { message = "Die Incident-ID muss größer als 0 sein." });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Length > 1000
+            || request.Reason.Any(character => char.IsControl(character)
+                || character is '\u2028' or '\u2029'))
+        {
+            return BadRequest(new
+            {
+                message = "Eine Begründung mit höchstens 1000 Zeichen ohne Steuerzeichen oder Zeilenumbrüche ist erforderlich."
+            });
+        }
+
+        var reason = request.Reason.Trim();
+
+        try
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync(
+                IsolationLevel.RepeatableRead, cancellationToken);
+
+            var administrator = await GetCurrentUserAsync(cancellationToken);
+            if (administrator is null || !administrator.IsActive
+                || administrator.Role != UserRole.Administrator)
+            {
+                return Forbid();
+            }
+
+            var incident = await _context.Incidents.SingleOrDefaultAsync(
+                incident => incident.Id == id, cancellationToken);
+            if (incident is null)
+            {
+                return NotFound();
+            }
+
+            if (incident.Status != IncidentStatus.Closed)
+            {
+                return Conflict(new { message = "Nur geschlossene Incidents dürfen wiedereröffnet werden." });
+            }
+
+            incident.Status = IncidentStatus.Active;
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            var reopenedAt = DateTimeOffset.UtcNow;
+            await LogIncidentAsync(LogLevel.Information,
+                $"Incident {incident.Id} reopened by administrator {administrator.Id} at {reopenedAt:O}. Reason: {reason}");
+
+            return Ok(ToResponseDto(incident));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Problem(statusCode: StatusCodes.Status500InternalServerError,
+                title: "Der Incident konnte nicht wiedereröffnet werden.");
+        }
+    }
+
     //Incident eskalieren
     [HttpPost("{id:int}/escalate")]
     public async Task<ActionResult<IncidentResponseDto>> Escalate(
