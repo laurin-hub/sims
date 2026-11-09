@@ -123,6 +123,38 @@ public class AuthController : ControllerBase
         }
     }
 
+
+
+    [Authorize]
+    [HttpPost("logout")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Logout()
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        await HttpContext.SignOutAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme);
+
+        try
+        {
+            await _redisLogService.WriteAsync(
+                LogLevel.Information,
+                $"User {userId} logged out");
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Redis-Protokollierung beim Logout fehlgeschlagen");
+        }
+
+        return Ok(new { message = "Abmeldung erfolgreich" });
+    }
+
+
+
+
+
     private async Task LogFailedLoginAsync()
     {
         //Bei Redis-Ausfall keinen zweiten Logversuch auslösen
