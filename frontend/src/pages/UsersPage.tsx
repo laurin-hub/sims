@@ -21,11 +21,12 @@ type FormState = typeof EMPTY_FORM;
 
 /**
  * Administrativen Benutzerverwaltung: Auflisten, Anlegen, Bearbeiten,
- * Deaktivieren. Das Backend bietet KEIN Passwortwechsel-Endpunkt, das
- * Bearbeiten-andert deshalb nur Benutzername, Rolle und Support-Level.
+ * Deaktivieren und Reaktivieren. Das Backend bietet KEIN
+ * Passwortwechsel-Endpunkt, das Bearbeiten aendert deshalb nur Benutzername,
+ * Rolle und Support-Level.
  */
 export default function UsersPage(): JSX.Element {
-  const { username: currentUsername, reportIdentity } = useAuth();
+  const { username: currentUsername, userId: currentUserId } = useAuth();
 
   const [users, setUsers] = useState<UserResponse[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -39,6 +40,8 @@ export default function UsersPage(): JSX.Element {
 
   const [editing, setEditing] = useState<UserResponse | null>(null);
   const [disableTarget, setDisableTarget] = useState<UserResponse | null>(null);
+  // Ziel der Reaktivierung (kein Bestätigungsdialog; direkt aus der Tabelle).
+  const [activatingId, setActivatingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => setTick((current) => current + 1), []);
@@ -53,10 +56,8 @@ export default function UsersPage(): JSX.Element {
         if (cancelled) return;
         setUsers(data);
         setLoadError(null);
-        // Eigenen Eintrag finden und Rolle an den AuthContext melden
-        // (die API liefert keinen "/me"-Endpunkt).
-        const me = data.find((user) => user.username === currentUsername);
-        if (me) reportIdentity(me.username, me.role);
+        // Identitaet und Rolle stammen autoritativ aus GET /api/auth/me
+        // (AuthContext); die Benutzerliste dient hier nur der Anzeige.
       })
       .catch(() => {
         if (!cancelled) {
@@ -68,7 +69,7 @@ export default function UsersPage(): JSX.Element {
       cancelled = true;
       controller.abort();
     };
-  }, [tick, currentUsername, reportIdentity]);
+  }, [tick, currentUsername, currentUserId]);
 
   async function handleCreate(event: FormEvent<HTMLFormElement>): Promise<void> {
     // Verhindert die native Formular-Standardaktion (GET-Submit mit Query-String).
@@ -135,6 +136,29 @@ export default function UsersPage(): JSX.Element {
           : "Der Benutzer konnte nicht deaktiviert werden."
       );
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleActivate(user: UserResponse): Promise<void> {
+    // Doppelklicks/Parallelanfragen unterbinden (busy deckt auch den
+    // Bestätigungsdialog der Deaktivierung mit ab).
+    if (busy) return;
+    setBusy(true);
+    setActivatingId(user.id);
+    setActionError(null);
+    try {
+      await usersApi.activate(user.id);
+      setFlash(`Benutzer '${user.username}' wurde reaktiviert.`);
+      reload();
+    } catch (error) {
+      setActionError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Der Benutzer konnte nicht reaktiviert werden."
+      );
+    } finally {
+      setActivatingId(null);
       setBusy(false);
     }
   }
@@ -323,14 +347,25 @@ export default function UsersPage(): JSX.Element {
                         >
                           Bearbeiten
                         </button>
-                        <button
-                          type="button"
-                          className="btn btn-small btn-danger"
-                          disabled={!user.isActive}
-                          onClick={() => setDisableTarget(user)}
-                        >
-                          Deaktivieren
-                        </button>
+                        {user.isActive ? (
+                          <button
+                            type="button"
+                            className="btn btn-small btn-danger"
+                            disabled={busy}
+                            onClick={() => setDisableTarget(user)}
+                          >
+                            Deaktivieren
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            disabled={busy}
+                            onClick={() => void handleActivate(user)}
+                          >
+                            {activatingId === user.id ? "Reaktivieren…" : "Reaktivieren"}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -360,7 +395,7 @@ export default function UsersPage(): JSX.Element {
       {disableTarget !== null && (
         <Modal
           title="Benutzer deaktivieren"
-          description={`Soll '${disableTarget.username}' wirklich deaktiviert werden? Der Zugriff wird sofort entzogen. Ein Reaktivieren ist ueber die API nicht moeglich.`}
+          description={`Soll '${disableTarget.username}' wirklich deaktiviert werden? Der Zugriff wird sofort entzogen. Der Benutzer kann spaeter ueber 'Reaktivieren' wieder aktiviert werden.`}
           confirmLabel="Deaktivieren"
           danger
           busy={busy}

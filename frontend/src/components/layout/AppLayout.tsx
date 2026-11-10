@@ -81,12 +81,28 @@ function navClass({ isActive }: { isActive: boolean }): string {
 
 /** App-Grundgeruest: Header mit Navigation, Session-Warnung und Inhalt. */
 export default function AppLayout(): JSX.Element {
-  const { username, isAdmin } = useAuth();
+  const { username, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
   const handleSessionEnded = useCallback(() => {
     navigate("/login", { replace: true });
   }, [navigate]);
+
+  const handleLogout = useCallback(async () => {
+    setLoggingOut(true);
+    setLogoutError(null);
+    try {
+      await logout();
+      // Session ist server- und clientseitig beendet.
+      navigate("/login", { replace: true });
+    } catch {
+      setLogoutError("Abmelden fehlgeschlagen. Bitte erneut versuchen.");
+    } finally {
+      setLoggingOut(false);
+    }
+  }, [logout, navigate]);
 
   return (
     <>
@@ -113,8 +129,22 @@ export default function AppLayout(): JSX.Element {
           <div className="app-user muted">
             <span className="app-user-dot" aria-hidden="true" />
             {username}
+            <button
+              type="button"
+              className="btn btn-logout"
+              onClick={handleLogout}
+              disabled={loggingOut}
+            >
+              {loggingOut ? "Abmelden..." : "Abmelden"}
+            </button>
           </div>
         </div>
+
+        {logoutError !== null ? (
+          <p className="error-text logout-error" role="alert">
+            {logoutError}
+          </p>
+        ) : null}
 
         <SessionExpiryTimer onExpire={handleSessionEnded} />
       </header>

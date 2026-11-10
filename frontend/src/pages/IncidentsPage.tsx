@@ -36,7 +36,7 @@ function apiErrorMessage(error: unknown, fallback: string): string {
  * Statuswechsel nur New -> Active; Schliessen nur ueber /close).
  */
 export default function IncidentsPage(): JSX.Element {
-  const { isAdmin, roleKnown } = useAuth();
+  const { userId, isAdmin, identityKnown } = useAuth();
 
   const [incidents, setIncidents] = useState<IncidentResponse[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -85,19 +85,21 @@ export default function IncidentsPage(): JSX.Element {
 
   /**
    * Berechtigung gemaess Backend (CanEditIncident): Bearbeiter oder
-   * Administrator. Da die API keine User-ID auf den angemeldeten Benutzer
-   * abbildet (/me fehlt), kann die Bearbeiter-Identitaet im Client nicht
-   * sicher bestimmt werden; Admins duerfen alles, fuer Nicht-Admins bleibt
-   * die Server-pruefung die Autoritaetsquelle (403 -> Fehlermeldung).
+   * Administrator. Die eigene ID stammt autoritativ aus GET /api/auth/me;
+   * solange sie (oder die Rolle) noch unbekannt ist, bleibt alles gesperrt
+   * (Anforderung: keine unberechtigten Aktionen waehrend die Identitaet
+   * noch geladen wird). Die Serverpruefung bleibt bei jeder Aktion
+   * massgeblich (403 -> Fehlermeldung).
    */
-  function canEdit(_incident: IncidentResponse): boolean {
-    return isAdmin;
+  function canEdit(incident: IncidentResponse): boolean {
+    if (!identityKnown) return false;
+    return isAdmin || incident.assigneeId === userId;
   }
 
-  /** Hint fuer gesperrte Aktionen (Rolle unbekannt vs. Nicht-Admin). */
+  /** Hint fuer gesperrte Aktionen (Identitaet unknown vs. Nicht-berechtigt). */
   function actionTitle(closed: boolean): string {
     if (closed) return "Geschlossene Incidents sind gesperrt.";
-    if (!roleKnown) return "Rolle wird noch ermittelt…";
+    if (!identityKnown) return "Identitaet wird noch ermittelt…";
     return "Diese Aktion steht nur Administratoren oder dem zugewiesenen Bearbeiter offen (Server-pruefung).";
   }
 
@@ -276,7 +278,7 @@ export default function IncidentsPage(): JSX.Element {
           {forbiddenNote}
         </div>
       )}
-      {roleKnown && !isAdmin && incidents !== null && incidents.length > 0 && (
+      {identityKnown && !isAdmin && incidents !== null && incidents.length > 0 && (
         <div className="notice banner" role="note">
           Als normaler Benutzer koennen Sie nur Vorfaelle bearbeiten, eskalieren
           oder schliessen, die Ihnen als Bearbeiter zugewiesen sind. Die

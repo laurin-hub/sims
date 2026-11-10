@@ -5,6 +5,7 @@ import type {
   EscalateIncidentRequest,
   IncidentResponse,
   LoginRequest,
+  MeResponse,
   MessageResponse,
   ReopenIncidentRequest,
   UpdateIncidentRequest,
@@ -14,7 +15,7 @@ import type {
 
 /**
  * Repraesentiert ausschliesslich die tatsaechlich implementierten Endpunkte.
- * Es existiert KEIN Logout-, KEIN "/me"- und KEIN Passwortwechsel-Endpunkt.
+ * Es existiert KEIN "/me"- und KEIN Passwortwechsel-Endpunkt.
  */
 export const authApi = {
   /** Holt den CSRF-Token. http.ts beschafft ihn bei Bedarf ebenfalls automatisch. */
@@ -24,8 +25,18 @@ export const authApi = {
       .then((response) => response.requestToken);
   },
 
+  /** Autoritative Identitaet (ID, Name, Rolle) der aktuellen Sitzung. */
+  getMe(signal?: AbortSignal): Promise<MeResponse> {
+    return http.get<MeResponse>("/auth/me", signal);
+  },
+
   login(request: LoginRequest, signal?: AbortSignal): Promise<MessageResponse> {
     return http.post<MessageResponse>("/auth/login", request, signal);
+  },
+
+  /** Beendet die serverseitige Sitzung (Cookie-Logout); POST mit CSRF-Schutz. */
+  logout(signal?: AbortSignal): Promise<MessageResponse> {
+    return http.post<MessageResponse>("/auth/logout", undefined, signal);
   }
 };
 
@@ -44,6 +55,11 @@ export const usersApi = {
 
   disable(id: number, signal?: AbortSignal): Promise<UserResponse> {
     return http.patch<UserResponse>(`/users/${id}/disable`, undefined, signal);
+  },
+
+  /** Reaktiviert einen deaktivierten Benutzer (nur Admin); 409 wenn bereits aktiv. */
+  activate(id: number, signal?: AbortSignal): Promise<UserResponse> {
+    return http.patch<UserResponse>(`/users/${id}/activate`, undefined, signal);
   }
 };
 

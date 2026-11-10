@@ -10,29 +10,31 @@ import {
 import type { ReactNode } from "react";
 import { authApi } from "../api/endpoints";
 import { ApiError, invalidateSession, onUnauthorized, resetCsrfToken } from "../api/http";
-import { usersApi } from "../api/endpoints";
-import type { LoginRequest, UserRole } from "../types/api";
+import { UserRole } from "../types/api";
+import type { LoginRequest, MeResponse } from "../types/api";
 
 /**
- * Die API liefert keinen "/me"-, Logout- oder Benutzer-nach-ID-Endpunkt.
- * Die Rolle des angemeldeten Benutzers laesst sich nurueber die Admin-only
- * Benutzerliste ermitteln. Der Client fuehrt deshalb einmalig einen
- * kostenfreien Test durch: GET /api/users liefert 200 fuer Administratoren
- * und 403 fuer normale Benutzer. Das Ergebnis wird zusaetzlich pro
- * Benutzernamen im sessionStorage gecacht (kein Passwort-/Credential-
- * Missbrauch; die Serverpruefung bleibt bei jedem Endpunkt massgeblich).
+ * Identitaet und Rolle stammen ausschliesslich aus GET /api/auth/me
+ * (autoritative Serverantwort: ID, Benutzername, Rolle). Der Client fuehrt
+ * die Ermittlung einmalig pro Sitzung (Login oder wiederhergestellte
+ * Sitzung) durch und cached das Ergebnis im sessionStorage, damit ein
+ * Neuladen nicht erneut eine Identitaetsabfrage ausloest. Bei HTTP 401
+ * verwirft der http-Listener die Sitzung; es wird niemals eine Identitaet
+ * aus Benutzernamen oder anderen Daten abgeleitet.
  */
 interface AuthContextValue {
+  /** Autoritative Benutzer-ID aus /auth/me; null, solange unbekannt. */
+  userId: number | null;
   username: string | null;
   isAdmin: boolean;
   isAuthenticated: boolean;
-  /** false, solange die Rolle ueber die API noch nicht ermittelt wurde. */
-  roleKnown: boolean;
+  /** false, solange /api/auth/me die Identitaet noch nicht bestaetigt hat. */
+  identityKnown: boolean;
   login: (request: LoginRequest) => Promise<void>;
-  /** Rein clientseitiger Status-Reset; die API bietet keinen Logout-Endpunkt. */
+  /** Serverseitiger Cookie-Logout; danach lokaler Status-Reset. */
+  logout: () => Promise<void>;
+  /** Rein clientseitiger Status-Reset; ohne Serveraufruf. */
   clearSession: () => void;
-  /** Wird gesetzt, wenn die Benutzerliste die eigene Rolle bestaetigt. */
-  reportIdentity: (username: string, role: UserRole) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -40,7 +42,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const STORAGE_KEY = "sims.auth";
 
 interface StoredAuth {
-  username: string;
+  /** Autoritative ID aus /auth/me; null, solange noch nicht bestaetigt. */
+  id: number | null;
+  username: string | null;
   /** Bekannte Rolle, oder null wenn noch nicht ueber die API ermittelt. */
   isAdmin: boolean | null;
 }
@@ -50,10 +54,11 @@ function readStoredAuth(): StoredAuth | null {
     const raw = window.sessionStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredAuth;
-    if (typeof parsed?.username !== "string") return null;
-    // Nur explizite Booleans uebernehmen; alles andere = unbekannt (null),
-    // damit eine wiederhergestellte Sitzung die Rollenermittlung ausloest.
+    if (typeof parsed?.username !== "string" || parsed.username === "") return null;
+    // ID und Rolle nur explizite Werte uebernehmen; sonst null, damit eine
+    // wiederhergestellte Sitzung die Identitaetsermittlung erneut ausloest.
     return {
+      id: typeof parsed.id === "number" && Number.isInteger(parsed.id) ? parsed.id : null,
       username: parsed.username,
       isAdmin: parsed.isAdmin === true ? true : parsed.isAdmin === false ? false : null
     };
@@ -62,17 +67,42 @@ function readStoredAuth(): StoredAuth | null {
   }
 }
 
+function persist(next: StoredAuth | null): void {
+  if (next === null) {
+    window.sessionStorage.removeItem(STORAGE_KEY);
+  } else {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  }
+}
+
+/**
+ * Tolerante Rollenauswertung fuer GET /auth/me: Die API serialisiert die
+ * Rolle nachweislich als String ("User"/"Administrator"). Numerische
+ * Darstellung (enum-Wert) wird zusaetzlich akzeptiert. Ein unbekanntes
+ * Rollenschema fuehrt zu null (= unbekannt) und loest eine erneute
+ * Identitaetsermittlung aus; niemals wird die Admin-Rolle angenommen.
+ */
+function parseAdminRole(role: MeResponse["role"]): boolean | null {
+  if (typeof role === "string") {
+    if (role === "Administrator") return true;
+    if (role === "User") return false;
+    return null;
+  }
+  if (role === UserRole.Administrator) return true;
+  if (role === UserRole.User) return false;
+  return null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<StoredAuth | null>(() => readStoredAuth());
-  const authRef = useRef<StoredAuth | null>(auth);
-  authRef.current = auth;
 
-  // Verhindert Doppelanfragen der Rollenermittlung (React-StrictMode);
+  // Verhindert Doppelanfragen der Identitaetsermittlung (React-StrictMode);
   // wird pro Sitzungssatz (Login/Logout/Session-Reset) zurueckgesetzt.
-  const roleProbeRef = useRef(false);
+  const probeRef = useRef(false);
   const probeOwnerRef = useRef<string | null>(null);
 
-  // Bei 401 (Ablauf nach 30 min, ohne Sliding Expiration) Session verwerfen.
+  // Bei 401 (Ablauf nach 30 min, ohne Sliding Expiration) Session verwerfen:
+  // ohne gueltige Sitzung darf keine Identitaet mehr angenommen werden.
   useEffect(() => onUnauthorized(() => setAuth(null)), []);
 
   const login = useCallback(async (request: LoginRequest) => {
@@ -82,100 +112,101 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // dem neuen Authentifizierungs-Cookie nicht mehr gueltig -> verwerfen,
     // damit der naechste schreibende Aufruf einen frischen Token holt.
     resetCsrfToken();
-    // Rolle ist nach dem Login unbekannt; die Rollenermittlung erfolgt
-    // automatisch ueber den Benutzerlisten-Test (siehe unten).
-    const next: StoredAuth = { username: request.username, isAdmin: null };
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    roleProbeRef.current = false;
+    // Identitaet (ID/Rolle) ist nach dem Login noch unbekannt; sie wird
+    // automatisch ueber GET /api/auth/me ermittelt (siehe unten).
+    const next: StoredAuth = { id: null, username: request.username, isAdmin: null };
+    persist(next);
+    probeRef.current = false;
     setAuth(next);
   }, []);
 
   const clearSession = useCallback(() => {
-    window.sessionStorage.removeItem(STORAGE_KEY);
-    roleProbeRef.current = false;
+    persist(null);
+    probeRef.current = false;
     invalidateSession();
     setAuth(null);
   }, []);
 
-  const reportIdentity = useCallback((username: string, role: UserRole) => {
-    setAuth((current) => {
-      if (!current) return current;
-      const next: StoredAuth = {
-        username,
-        isAdmin: role === 1 /* UserRole.Administrator */
-      };
-      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
+  // Serverseitiger Cookie-Logout. Bei Erfolg (HTTP 200) und auch bei 401
+  // (Sitzung bereits abgelaufen) wird die lokale Session verworfen; bei
+  // sonstigen Fehlern (Netzwerk/5xx) bleibt sie bestehen, damit der
+  // Benutzer erneut versuchen kann, sich abzumelden.
+  const logout = useCallback(async () => {
+    try {
+      await authApi.logout();
+      resetCsrfToken();
+      clearSession();
+    } catch (error) {
+      if (error instanceof ApiError && error.isUnauthorized) {
+        clearSession();
+      } else {
+        throw error;
+      }
+    }
+  }, [clearSession]);
 
-  // Rollenermittlung: Die API bietet keinen /me-Endpunkt. GET /api/users
-  // ist der einzige authentifizierte Endpunkt, dessen HTTP-Status die Rolle
-  // zuverlaessig offenlegt: 200 = Administrator, 403 = normaler Benutzer.
-  // Laeuft automatisch bei jeder Sitzung (auch wiederhergestellten) mit
-  // unbekannter Rolle. Das Once-Flag verhindert Doppelanfragen durch
-  // React-StrictMode; bei einem ungueltigen Ergebnis (Netzwerk/Timeout)
-  // bleibt die Rolle unbekannt (null) und wird spaetestens nach einem
-  // Neuladen erneut geprueft - niemals als Nicht-Admin gewertet.
+  // Identitaetsermittlung: GET /api/auth/me liefert die autoritative ID,
+  // den Benutzernamen und die Rolle der aktuellen Sitzung. Laeuft automatisch
+  // bei jeder Sitzung (auch wiederhergestellten) mit unbekannter Identitaet.
+  // Das Once-Flag verhindert Doppelanfragen durch React-StrictMode; bei einem
+  // ungueltigen Ergebnis (Netzwerk/Timeout) bleibt alles unbekannt und wird
+  // spaetestens nach einem Neuladen erneut geprueft. Ein 401 loescht ueber den
+  // unauthorized-Listener die gesamte Session (kein Identitaets-Annahme).
   useEffect(() => {
-    // Gilt pro Anmelder: ein neuer Eigentuemernamen hebt das Einmal-Flag auf
-    // (ersetzt Login-Logout-Zyklen ohne Neuladen, auch bei gleichem Namen
-    // nach Server-seitiger Rollen-Aenderung und erneutem Login).
+    // Gilt pro Sitzung: eine neue/anonym -> angemeldet-Umgebung hebt das
+    // Einmal-Flag auf (ersetzt Login-Logout-Zyklen ohne Neuladen).
     if (probeOwnerRef.current !== auth?.username) {
       probeOwnerRef.current = auth?.username ?? null;
-      roleProbeRef.current = false;
+      probeRef.current = false;
     }
-    if (roleProbeRef.current) return;
-    if (auth === null || auth.isAdmin !== null) return;
-    roleProbeRef.current = true;
+    if (probeRef.current) return;
+    if (auth === null || auth.id !== null) return;
+    probeRef.current = true;
 
     const controller = new AbortController();
 
-    usersApi
-      .list(controller.signal)
-      .then((users) => {
-        // Serverantwort ist massgeblich: eigene Rolle aus der Liste lesen.
-        const me = users.find((user) => user.username === auth.username);
-        if (me) {
-          reportIdentity(me.username, me.role);
-        } else {
-          // Kein Treffer (anomale Datenlage): Probe fuer erneuten Versuch freigeben.
-          roleProbeRef.current = false;
-        }
-      })
-      .catch((error: unknown) => {
-        if (error instanceof ApiError && error.isForbidden) {
-          // 403 = authentifiziert, aber kein Administrator (Server-Urteil).
-          setAuth((current) => {
-            if (!current) return current;
-            const next: StoredAuth = { username: current.username, isAdmin: false };
-            window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-            return next;
-          });
+    authApi
+      .getMe(controller.signal)
+      .then((me) => {
+        const isAdmin = parseAdminRole(me.role);
+        if (typeof me.id !== "number" || isAdmin === null) {
+          // Unbekanntes Antwort-/Rollenschema: keine Identitaet annehmen,
+          // Probe fuer einen erneuten Versuch freigeben.
+          probeRef.current = false;
           return;
         }
-        // 401 = Sitzung abgelaufen: sessionListener hat auth bereits geloescht;
-        // keine rollenrelevante Aussage, Flag bleibt auf true.
+        const next: StoredAuth = {
+          id: me.id,
+          username: me.username,
+          isAdmin
+        };
+        persist(next);
+        setAuth(next);
+      })
+      .catch((error: unknown) => {
+        // 401: sessionListener hat auth bereits geloescht; Flag bleibt auf
+        // true, eine neue Sitzung setzt es beim naechsten Login zurueck.
         if (error instanceof ApiError && error.isUnauthorized) return;
-        // Netzwerkfehler/Timeout: keine rollenrelevante Aussage; Probe fuer
-        // einen erneuten Versuch freigeben (Rolle bleibt unbekannt/null).
-        roleProbeRef.current = false;
+        // Netzwerkfehler/Timeout/sonstiges: keine Identitaets-Aussage; Probe
+        // fuer einen erneuten Versuch freigeben (alles bleibt unbekannt).
+        probeRef.current = false;
       });
 
     return () => controller.abort();
-  }, [auth, reportIdentity]);
+  }, [auth]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
+      userId: auth?.id ?? null,
       username: auth?.username ?? null,
       isAdmin: auth?.isAdmin === true,
       isAuthenticated: auth !== null,
-      roleKnown: auth !== null && auth.isAdmin !== null,
+      identityKnown: auth !== null && auth.id !== null && auth.isAdmin !== null,
       login,
-      clearSession,
-      reportIdentity
+      logout,
+      clearSession
     }),
-    [auth, login, clearSession, reportIdentity]
+    [auth, login, logout, clearSession]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

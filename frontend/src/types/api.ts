@@ -35,6 +35,18 @@ export interface LoginRequest {
   password: string;
 }
 
+/**
+ * Identitaet aus GET /api/auth/me. Die Rolle wird als String serialisiert
+ * ("User"/"Administrator"); zur toleranten Verarbeitung ist der Typ als
+ * Union aus String- und numerischer Form definiert. Die Auswertung erfolgt
+ * zentral in AuthContext (keine numerische Direktauswertung im Viewer).
+ */
+export interface MeResponse {
+  id: number;
+  username: string;
+  role: UserRole | string | number;
+}
+
 export interface MessageResponse {
   message: string;
 }
