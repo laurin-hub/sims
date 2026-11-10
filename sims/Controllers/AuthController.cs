@@ -126,6 +126,27 @@ public class AuthController : ControllerBase
 
 
     [Authorize]
+    [HttpGet("me")]
+    public IActionResult Me()
+    {
+        var userIdValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        if (!int.TryParse(userIdValue, out var userId))
+        {
+            return Unauthorized();
+        }
+
+        return Ok(new
+        {
+            id = userId,
+            username = User.Identity?.Name,
+            role = User.FindFirstValue(ClaimTypes.Role)
+        });
+    }
+
+
+
+    [Authorize]
     [HttpPost("logout")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Logout()
