@@ -1,0 +1,44 @@
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 36px 34px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  animation: fade-up 0.25s ease;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font: 700 22px/1 var(--font);
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+}
+
+.login-mark {
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  transform: rotate(45deg);
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+
+.login-subtitle {
+  margin: 8px 0 28px;
+  letter-spacing: 0.08em;
+}
+
+.login-submit {
+  width: 100%;
+  margin-top: 6px;
+}

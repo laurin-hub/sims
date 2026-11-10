@@ -1,0 +1,25 @@
+.incidents-grid {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 16px;
+  margin-top: 24px;
+  align-items: start;
+}
+
+/* Banner-Zeile mit Quittierungs-Button (gilt auch fuer UsersPage). */
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.notice-dismiss {
+  flex-shrink: 0;
+}
+
+@media (max-width: 960px) {
+  .incidents-grid {
+    grid-template-columns: 1fr;
+  }
+}
