@@ -294,6 +294,77 @@ public class UsersController : ControllerBase
         }
     }
 
+
+
+    [HttpPatch("{id:int}/activate")]
+    [Authorize(Roles = nameof(UserRole.Administrator))]
+    public async Task<ActionResult<UserResponseDto>> Activate(int id, CancellationToken cancellationToken)
+    {
+        if (id <= 0)
+        {
+            return BadRequest(new { message = "Die Benutzer-ID muss größer als 0 sein." });
+        }
+
+        if (!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var administratorId)
+            || administratorId <= 0)
+        {
+            return Forbid();
+        }
+
+        try
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable, cancellationToken);
+
+            var isActiveAdministrator = await _context.Users.AnyAsync(
+                user => user.Id == administratorId && user.IsActive
+                    && user.Role == UserRole.Administrator, cancellationToken);
+
+            if (!isActiveAdministrator)
+            {
+                return Forbid();
+            }
+
+            var user = await _context.Users.SingleOrDefaultAsync(
+                user => user.Id == id, cancellationToken);
+
+            if (user is null)
+            {
+                return NotFound();
+            }
+
+            if (user.IsActive)
+            {
+                return Conflict(new { message = "Der Benutzer ist bereits aktiv." });
+            }
+
+            user.IsActive = true;
+
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            await LogUserActionAsync(
+                $"User {user.Id} activated by administrator {administratorId}.");
+
+            return Ok(new UserResponseDto
+            {
+                Id = user.Id,
+                Username = user.Username,
+                Role = user.Role,
+                SupportLevel = user.SupportLevel,
+                IsActive = user.IsActive
+            });
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status500InternalServerError,
+                title: "Der Benutzer konnte nicht reaktiviert werden.");
+        }
+    }
+
+
+
     private async Task LogUserActionAsync(string message)
     {
         var stored = await _redisLogService.WriteAsync(LogLevel.Information, message);
