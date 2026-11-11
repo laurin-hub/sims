@@ -1,0 +1,17 @@
+# Git und Visual Studio
+.git
+.vs
+**/*.user
+**/*.suo
+
+# Build-Artefakte
+**/bin
+**/obj
+**/node_modules
+**/dist
+
+# Lokale Secrets
+**/.env
+**/.env.*
+**/secrets.json
+**/appsettings.*.local.json
