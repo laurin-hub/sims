@@ -8,6 +8,7 @@ using sims.Data;
 using sims.Setup;
 using sims.Logging;
 using StackExchange.Redis;
+using Microsoft.AspNetCore.HttpOverrides;
 
 namespace sims;
 
@@ -203,6 +204,22 @@ public class Program
                 statusCode: StatusCodes.Status500InternalServerError,
                 title: "Die Anfrage konnte nicht verarbeitet werden").ExecuteAsync(context));
         });
+
+//HTTPS-Infos werden vom vertrauenswürdigen Docker-Proxy übernommen
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedProto,
+
+    KnownIPNetworks =
+    {
+        new System.Net.IPNetwork(
+            System.Net.IPAddress.Parse("172.18.0.0"),
+            16)
+    }
+});
+
+app.UseHttpsRedirection();
+
 
         app.UseHttpsRedirection();
 

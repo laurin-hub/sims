@@ -25,6 +25,34 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  api:
+    image: sims-api:dev
+    build:
+      context: .
+      dockerfile: sims/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__SIMS: "Server=sqlserver,1433;Database=SIMS;User Id=sa;Password=${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD muss gesetzt sein};Encrypt=True;TrustServerCertificate=True"
+      ConnectionStrings__Redis: "redis:6379"
+    depends_on:
+      - sqlserver
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    image: sims-frontend:dev
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8443:443"
+    volumes:
+      - ./frontend/certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   sims_sql_data:
     name: sims_sql_data
